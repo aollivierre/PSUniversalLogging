@@ -1,0 +1,64 @@
+# PowerShell
+*.ps1xml
+*.psc1
+*.psm1.bak
+*.psd1.bak
+
+# Logs
+*.log
+*.transcript
+logs/
+Logs/
+CSV/
+
+# Test outputs
+TestResults/
+test-results/
+*.trx
+
+# User-specific files
+*.user
+.vscode/
+*.code-workspace
+
+# Windows
+Thumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# macOS
+.DS_Store
+.DS_Store?
+._*
+
+# Build outputs
+bin/
+obj/
+out/
+build/
+
+# Package files
+*.nupkg
+*.snupkg
+packages/
+
+# Backup files
+*.bak
+*.backup
+*.old
+
+# Temporary files
+*.tmp
+*.temp
+temp/
+tmp/
+
+# IDE
+.idea/
+*.swp
+*.swo
+
+# Coverage
+coverage/
+*.coverage
+.coverage
