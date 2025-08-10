@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Universal PowerShell Logging Module - Generic, Reusable, and Extensible
     
@@ -164,10 +164,16 @@ function Initialize-Logging {
     $logFileName = "$($userContext.ComputerName)-$callingScript-$($userContext.UserType)-$($userContext.UserName)-$ParentScriptName-activity-$timestamp.log"
     $script:SessionLogFilePath = Join-Path -Path $script:SessionFullLogDirectory -ChildPath $logFileName
     
+    # CRITICAL FIX: Set LogPath for Write-EnhancedLog to use
+    $script:LogConfig.LogPath = $script:SessionLogFilePath
+    
     # Also set CSV paths
     $script:SessionFullCSVDirectory = Join-Path -Path $BaseLogPath -ChildPath "CSV\$dateFolder\$ParentScriptName"
     $csvFileName = "$($userContext.ComputerName)-$callingScript-$($userContext.UserType)-$($userContext.UserName)-$ParentScriptName-activity-$timestamp.csv"
     $script:SessionCSVFilePath = Join-Path -Path $script:SessionFullCSVDirectory -ChildPath $csvFileName
+    
+    # CRITICAL FIX: Set CSVLogPath for Write-EnhancedLog to use
+    $script:LogConfig.CSVLogPath = $script:SessionCSVFilePath
     
     # Set other session variables
     $script:SessionUserContext = $userContext
@@ -209,6 +215,8 @@ function Initialize-Logging {
 #region Logging Function
 
 
+# DEPRECATED: Functionality merged into Write-EnhancedLog
+<# 
 function Write-AppDeploymentLog {
     [CmdletBinding()]
     Param (
@@ -584,34 +592,38 @@ function Write-AppDeploymentLog {
     }
     #endregion CSV Logging
 
-    #region Console Output (only in EnableDebug mode)
+    #region Console Output
+    # Always output to console unless explicitly in SilentMode
     if ($loggingMode -eq 'EnableDebug') {
-        
-        switch ($Level.ToUpper()) {
-            'ERROR' { Write-Host $consoleLogMessage -ForegroundColor Red }
-            'WARNING' { Write-Host $consoleLogMessage -ForegroundColor Yellow }
-            'INFO' { Write-Host $consoleLogMessage -ForegroundColor White }
-            'DEBUG' { Write-Host $consoleLogMessage -ForegroundColor Gray }
-            'SUCCESS' { Write-Host $consoleLogMessage -ForegroundColor Green }
+        # Show debug messages only in EnableDebug mode
+        if ($Level.ToUpper() -eq 'DEBUG' -and $loggingMode -ne 'EnableDebug') {
+            # Skip debug messages unless in debug mode
+        } else {
+            switch ($Level.ToUpper()) {
+                'ERROR' { Write-Host $consoleLogMessage -ForegroundColor Red }
+                'WARNING' { Write-Host $consoleLogMessage -ForegroundColor Yellow }
+                'INFO' { Write-Host $consoleLogMessage -ForegroundColor White }
+                'DEBUG' { Write-Host $consoleLogMessage -ForegroundColor Gray }
+                'SUCCESS' { Write-Host $consoleLogMessage -ForegroundColor Green }
+            }
         }
     }
     #endregion Console Output
 }
+#>
 
 function Write-EnhancedLog {
     [CmdletBinding()]
     param (
+        [Parameter(Mandatory = $true)]
         [string]$Message,
+        [Parameter()]
+        [ValidateSet('INFO', 'WARNING', 'ERROR', 'DEBUG', 'SUCCESS', 'INFORMATION', 'CRITICAL', 'NOTICE', 'VERBOSE')]
         [string]$Level = 'INFO',
+        [Parameter()]
+        [ValidateSet('EnableDebug', 'SilentMode', 'Off')]
         [string]$LoggingMode = 'SilentMode'
     )
-
-    # Get the PowerShell call stack to determine the actual calling function
-    $callStack = Get-PSCallStack
-    $callerFunction = if ($callStack.Count -ge 2) { $callStack[1].Command } else { '<Unknown>' }
-
-    # Get the parent script name
-    $parentScriptName = Get-ParentScriptName
 
     # Map enhanced log levels to standard log levels
     $mappedLevel = switch ($Level.ToUpper()) {
@@ -619,26 +631,109 @@ function Write-EnhancedLog {
         'ERROR'    { 'ERROR' }
         'WARNING'  { 'WARNING' }
         'INFO'     { 'INFO' }
-        'INFORMATION' { 'INFO' }  # Support old verbose name
+        'INFORMATION' { 'INFO' }
         'DEBUG'    { 'DEBUG' }
         'NOTICE'   { 'INFO' }
-        'IMPORTANT' { 'INFO' }
-        'OUTPUT'   { 'INFO' }
-        'SIGNIFICANT' { 'INFO' }
         'VERBOSE'  { 'DEBUG' }
         'SUCCESS'  { 'SUCCESS' }
-        'VERYVERBOSE' { 'DEBUG' }
-        'SOMEWHATVERBOSE' { 'DEBUG' }
-        'SYSTEM'   { 'INFO' }
-        'INTERNALCOMMENT' { 'DEBUG' }
         default    { 'INFO' }
     }
 
-    # Format message with caller information
-    $formattedMessage = "[$parentScriptName.$callerFunction] $Message"
+    # Determine logging mode - check EnableDebug first, then parameter
+    $loggingMode = if ($global:EnableDebug) { 
+        'EnableDebug' 
+    } else { 
+        $LoggingMode 
+    }
 
-    # Use the existing Write-AppDeploymentLog function
-    Write-AppDeploymentLog -Message $formattedMessage -Level $mappedLevel -Mode $LoggingMode
+    # Note: We NO longer exit early - we always want file logging even when console is off
+
+    # Get caller information using call stack
+    $callStack = Get-PSCallStack
+    $callerFunction = '<Unknown>'
+    $lineNumber = 0
+    
+    # Skip wrapper functions to find the real caller
+    if ($callStack.Count -ge 2) {
+        $actualCaller = $callStack[1]
+        $callerFunction = $actualCaller.Command
+        $lineNumber = $actualCaller.ScriptLineNumber
+    }
+
+    # Get the parent script name
+    $parentScriptName = Get-ParentScriptName
+
+    # Format timestamp
+    $timestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+
+    # Build console message with appropriate detail level
+    # Show function/line for ALL messages when EnableDebug, or for ERROR/WARNING always
+    if ($loggingMode -eq 'EnableDebug') {
+        # In debug mode, show function and line number for ALL messages
+        $consoleLogMessage = "[$timestamp] [${mappedLevel}:${callerFunction}:${lineNumber}] $Message"
+    } elseif ($mappedLevel -in @('ERROR', 'WARNING')) {
+        # Always show function/line for errors and warnings
+        $consoleLogMessage = "[$timestamp] [${mappedLevel}:${callerFunction}:${lineNumber}] $Message"
+    } else {
+        # Clean output for RMM when not in debug mode
+        $consoleLogMessage = "[$timestamp] [$mappedLevel] $Message"
+    }
+
+    # File logging - ALWAYS log to file regardless of mode
+    try {
+        if ($script:LogConfig.Initialized -and $script:LogConfig.LogPath) {
+            # File always gets full details
+            $fileLogMessage = "[$timestamp] [$parentScriptName.${callerFunction}:${lineNumber}] [$mappedLevel] $Message"
+            Add-Content -Path $script:LogConfig.LogPath -Value $fileLogMessage -Force -ErrorAction SilentlyContinue
+        }
+    } catch {
+        # Silent error handling for file logging
+    }
+
+    # CSV logging
+    try {
+        if ($script:LogConfig.Initialized -and $script:LogConfig.CSVLogPath) {
+            # Ensure CSV directory exists
+            $csvDir = Split-Path -Path $script:LogConfig.CSVLogPath -Parent
+            if (-not (Test-Path -Path $csvDir)) {
+                New-Item -ItemType Directory -Path $csvDir -Force -ErrorAction SilentlyContinue | Out-Null
+            }
+            
+            $csvEntry = [PSCustomObject]@{
+                Timestamp = $timestamp
+                Level = $mappedLevel
+                Function = $callerFunction
+                LineNumber = $lineNumber
+                Message = $Message
+                ScriptName = $parentScriptName
+            }
+            
+            # Check if file exists to determine if we need headers
+            if (Test-Path -Path $script:LogConfig.CSVLogPath) {
+                $csvEntry | Export-Csv -Path $script:LogConfig.CSVLogPath -Append -NoTypeInformation -Force -ErrorAction SilentlyContinue
+            } else {
+                $csvEntry | Export-Csv -Path $script:LogConfig.CSVLogPath -NoTypeInformation -Force -ErrorAction SilentlyContinue
+            }
+        }
+    } catch {
+        # Silent error handling for CSV logging
+    }
+
+    # Console Output - Only output when EnableDebug mode is active
+    if ($loggingMode -eq 'EnableDebug') {
+        # Show debug messages only in EnableDebug mode
+        if ($mappedLevel -eq 'DEBUG' -and $loggingMode -ne 'EnableDebug') {
+            # Skip debug messages unless in debug mode
+        } else {
+            switch ($mappedLevel) {
+                'ERROR' { Write-Host $consoleLogMessage -ForegroundColor Red }
+                'WARNING' { Write-Host $consoleLogMessage -ForegroundColor Yellow }
+                'INFO' { Write-Host $consoleLogMessage -ForegroundColor White }
+                'DEBUG' { Write-Host $consoleLogMessage -ForegroundColor Gray }
+                'SUCCESS' { Write-Host $consoleLogMessage -ForegroundColor Green }
+            }
+        }
+    }
 }
 
 #region Helper Functions
@@ -1127,7 +1222,6 @@ function Get-LoggingModuleVersion {
 # Export module members
 Export-ModuleMember -Function @(
     'Initialize-Logging',
-    'Write-AppDeploymentLog',
     'Write-EnhancedLog',
     'Handle-Error',
     'Get-ParentScriptName',
@@ -1139,3 +1233,4 @@ Export-ModuleMember -Function @(
     'Get-TranscriptFilePath',
     'Get-CSVLogFilePath'
 )
+
