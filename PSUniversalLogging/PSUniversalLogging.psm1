@@ -152,7 +152,20 @@ function Initialize-Logging {
     
     # Set up session variables to ensure single log file per execution
     $userContext = Get-CurrentUser
-    $callingScript = Get-CallingScriptName
+    
+    # Use ParentScriptName for the calling script instead of Get-CallingScriptName
+    # This ensures the log filename shows the actual script name, not PSUniversalLogging
+    $callingScript = if ($ParentScriptName) {
+        # Extract just the script name without Win11_Detection_ConnectWise suffix
+        if ($ParentScriptName -match '^Win11_Detection') {
+            "Win11-Detection"
+        } else {
+            $ParentScriptName
+        }
+    } else {
+        Get-CallingScriptName
+    }
+    
     $dateFolder = Get-Date -Format "yyyy-MM-dd"
     $timestamp = Get-Date -Format "yyyy-MM-dd-HH-mm-ss"
     
