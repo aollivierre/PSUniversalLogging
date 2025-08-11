@@ -36,25 +36,25 @@
     # Example 1: Use in a backup script
     Import-Module .\logging.psm1
     Initialize-Logging -BaseLogPath "D:\BackupLogs" -JobName "DailyBackup" -ParentScriptName "Backup-Database"
-    Write-AppDeploymentLog -Message "Backup started" -Level "INFO"
+    Write-EnhancedLog -Message "Backup started" -Level "INFO"
     
 .EXAMPLE
     # Example 2: Use in an installation script
     Import-Module .\logging.psm1
     Initialize-Logging -BaseLogPath "$env:TEMP\Install" -JobName "AppInstaller" -ParentScriptName "Install-Software"
-    Write-AppDeploymentLog -Message "Installation beginning" -Level "INFO"
+    Write-EnhancedLog -Message "Installation beginning" -Level "INFO"
     
 .EXAMPLE
     # Example 3: Use in a monitoring tool with network logging
     Import-Module .\logging.psm1
     Initialize-Logging -BaseLogPath "C:\Monitoring\Logs" -JobName "ServerMonitor" -ParentScriptName "Monitor-Services" -NetworkLogPath "\\CentralServer\Logs"
-    Write-AppDeploymentLog -Message "Monitoring check started" -Level "INFO"
+    Write-EnhancedLog -Message "Monitoring check started" -Level "INFO"
     
 .EXAMPLE
     # Example 4: Extend with custom wrapper
     function Write-MyAppLog {
         param([string]$Message, [string]$Level = 'Information')
-        Write-AppDeploymentLog -Message $Message -Level $Level
+        Write-EnhancedLog -Message $Message -Level $Level
     }
     Write-MyAppLog "This will show the correct line number!"
     
@@ -215,20 +215,35 @@ function Initialize-Logging {
 #region Logging Function
 
 
-# DEPRECATED: Functionality merged into Write-EnhancedLog
-<# 
-function Write-AppDeploymentLog {
+function Write-EnhancedLog {
     [CmdletBinding()]
     Param (
         [Parameter(Mandatory = $true)]
         [string]$Message,
         [Parameter()]
-        [ValidateSet('INFO', 'WARNING', 'ERROR', 'DEBUG', 'SUCCESS')]
+        [ValidateSet('INFO', 'WARNING', 'ERROR', 'DEBUG', 'SUCCESS', 'INFORMATION', 'CRITICAL', 'NOTICE', 'VERBOSE')]
         [string]$Level = 'INFO',
         [Parameter()]
         [ValidateSet('EnableDebug', 'SilentMode', 'Off')]
         [string]$Mode = 'Off'
     )
+
+    # Map enhanced log levels to standard log levels
+    $mappedLevel = switch ($Level.ToUpper()) {
+        'CRITICAL' { 'ERROR' }
+        'ERROR'    { 'ERROR' }
+        'WARNING'  { 'WARNING' }
+        'INFO'     { 'INFO' }
+        'INFORMATION' { 'INFO' }
+        'DEBUG'    { 'DEBUG' }
+        'NOTICE'   { 'INFO' }
+        'VERBOSE'  { 'DEBUG' }
+        'SUCCESS'  { 'SUCCESS' }
+        default    { 'INFO' }
+    }
+
+    # Use mapped level for internal operations
+    $Level = $mappedLevel
 
     # Determine logging mode - check EnableDebug first, then parameter, then default to Off
     $loggingMode = if ($global:EnableDebug) { 
@@ -254,7 +269,7 @@ function Write-AppDeploymentLog {
     $actualCaller = $null
     
     # Skip known wrapper functions to find the real caller
-    # Stack[0] = Write-AppDeploymentLog (this function)
+    # Stack[0] = Write-EnhancedLog (this function)
     # Stack[1] = Write-DetectionLog/Write-RemediationLog (wrapper) OR direct caller
     # Stack[2] = Actual caller if wrapper exists
     
@@ -337,7 +352,7 @@ function Write-AppDeploymentLog {
     } else {
         $consoleLogMessage = "[$Level] [$parentScriptName.$callerFunction] - $Message"
         # ALWAYS show debug info when line number is missing and we're in debug mode
-        if ($loggingMode -eq 'EnableDebug') {
+        if ($loggingMode -eq 'EnableDebug' -and -not $global:SuppressConsoleOutput) {
             Write-Host "[LOGGING DEBUG] Missing line number! LineNumber='$lineNumber' CallerFunction='$callerFunction' ThroughWrapper=$throughWrapper" -ForegroundColor Magenta
             Write-Host "[LOGGING DEBUG] Call stack analysis:" -ForegroundColor Magenta
             for ($i = 0; $i -lt [Math]::Min($callStack.Count, 5); $i++) {
@@ -599,19 +614,22 @@ function Write-AppDeploymentLog {
         if ($Level.ToUpper() -eq 'DEBUG' -and $loggingMode -ne 'EnableDebug') {
             # Skip debug messages unless in debug mode
         } else {
-            switch ($Level.ToUpper()) {
-                'ERROR' { Write-Host $consoleLogMessage -ForegroundColor Red }
-                'WARNING' { Write-Host $consoleLogMessage -ForegroundColor Yellow }
-                'INFO' { Write-Host $consoleLogMessage -ForegroundColor White }
-                'DEBUG' { Write-Host $consoleLogMessage -ForegroundColor Gray }
-                'SUCCESS' { Write-Host $consoleLogMessage -ForegroundColor Green }
+            # Check if console output should be suppressed (for clean RMM output)
+            if (-not $global:SuppressConsoleOutput) {
+                switch ($Level.ToUpper()) {
+                    'ERROR' { Write-Host $consoleLogMessage -ForegroundColor Red }
+                    'WARNING' { Write-Host $consoleLogMessage -ForegroundColor Yellow }
+                    'INFO' { Write-Host $consoleLogMessage -ForegroundColor White }
+                    'DEBUG' { Write-Host $consoleLogMessage -ForegroundColor Gray }
+                    'SUCCESS' { Write-Host $consoleLogMessage -ForegroundColor Green }
+                }
             }
         }
     }
     #endregion Console Output
 }
-#>
 
+<#
 function Write-EnhancedLog {
     [CmdletBinding()]
     param (
@@ -736,6 +754,9 @@ function Write-EnhancedLog {
     }
 }
 
+
+#>
+
 #region Helper Functions
 
 
@@ -762,15 +783,15 @@ function Handle-Error {
             "Exception Message: $($ErrorRecord.Exception.Message)"
         }
 
-        Write-AppDeploymentLog -Message $errorMessage -Level Error -Mode $LoggingMode
-        Write-AppDeploymentLog -Message "Full Exception Details: $fullErrorDetails" -Level Debug -Mode $LoggingMode
-        Write-AppDeploymentLog -Message "Script Line Number: $($ErrorRecord.InvocationInfo.ScriptLineNumber)" -Level Debug -Mode $LoggingMode
-        Write-AppDeploymentLog -Message "Position Message: $($ErrorRecord.InvocationInfo.PositionMessage)" -Level Debug -Mode $LoggingMode
+        Write-EnhancedLog -Message $errorMessage -Level Error -Mode $LoggingMode
+        Write-EnhancedLog -Message "Full Exception Details: $fullErrorDetails" -Level Debug -Mode $LoggingMode
+        Write-EnhancedLog -Message "Script Line Number: $($ErrorRecord.InvocationInfo.ScriptLineNumber)" -Level Debug -Mode $LoggingMode
+        Write-EnhancedLog -Message "Position Message: $($ErrorRecord.InvocationInfo.PositionMessage)" -Level Debug -Mode $LoggingMode
     } 
     catch {
         # Fallback error handling in case of an unexpected error in the try block
-        Write-AppDeploymentLog -Message "An error occurred while handling another error. Original Exception: $($ErrorRecord.Exception.Message)" -Level Error -Mode $LoggingMode
-        Write-AppDeploymentLog -Message "Handler Exception: $($_.Exception.Message)" -Level Error -Mode $LoggingMode
+        Write-EnhancedLog -Message "An error occurred while handling another error. Original Exception: $($ErrorRecord.Exception.Message)" -Level Error -Mode $LoggingMode
+        Write-EnhancedLog -Message "Handler Exception: $($_.Exception.Message)" -Level Error -Mode $LoggingMode
     }
 }
 #endregion Error Handling
@@ -866,7 +887,7 @@ function Get-CurrentUser {
         }
     }
     catch {
-        Write-AppDeploymentLog -Message "Failed to get current user context: $($_.Exception.Message)" -Level Error -Mode SilentMode
+        Write-EnhancedLog -Message "Failed to get current user context: $($_.Exception.Message)" -Level Error -Mode SilentMode
         return @{
             UserType = "Unknown"
             UserName = "UnknownUser"
@@ -888,7 +909,7 @@ function Get-CallingScriptName {
         $callingScript = "UnknownCaller"
         
         # Skip internal logging functions and Discovery script itself
-        $skipFunctions = @('Write-AppDeploymentLog', 'Write-EnhancedLog', 'Handle-Error', 'Get-CallingScriptName', 'Get-CurrentUser')
+        $skipFunctions = @('Write-EnhancedLog', 'Write-EnhancedLog', 'Handle-Error', 'Get-CallingScriptName', 'Get-CurrentUser')
         $skipScripts = @('Discovery', 'Discovery.ps1')
         
         # Start from index 1 to skip the current function
@@ -983,7 +1004,7 @@ function Start-UniversalTranscript {
     try {
         # Check if file logging is disabled
         if ($script:DisableFileLogging) {
-            Write-AppDeploymentLog -Message "Transcript not started - file logging is disabled" -Level Debug -Mode $LoggingMode
+            Write-EnhancedLog -Message "Transcript not started - file logging is disabled" -Level Debug -Mode $LoggingMode
             return $null
         }
         
@@ -1009,7 +1030,7 @@ function Start-UniversalTranscript {
         # Start transcript with error handling and suppress all console output
         try {
             Start-Transcript -Path $transcriptPath -ErrorAction Stop | Out-Null
-            Write-AppDeploymentLog -Message "Transcript started successfully at: $transcriptPath" -Level Information -Mode $LoggingMode
+            Write-EnhancedLog -Message "Transcript started successfully at: $transcriptPath" -Level Information -Mode $LoggingMode
         }
         catch {
             Handle-Error -ErrorRecord $_ -CustomMessage "Failed to start transcript at $transcriptPath" -LoggingMode $LoggingMode
@@ -1023,7 +1044,7 @@ function Start-UniversalTranscript {
                 $filesToRemove = $transcriptFiles | Select-Object -Skip 7
                 foreach ($file in $filesToRemove) {
                     Remove-Item -Path $file.FullName -Force -ErrorAction SilentlyContinue
-                    Write-AppDeploymentLog -Message "Removed old transcript file: $($file.FullName)" -Level Debug -Mode $LoggingMode
+                    Write-EnhancedLog -Message "Removed old transcript file: $($file.FullName)" -Level Debug -Mode $LoggingMode
                 }
             }
         }
@@ -1048,7 +1069,7 @@ function Stop-UniversalTranscript {
     try {
         # Check if file logging is disabled
         if ($script:DisableFileLogging) {
-            Write-AppDeploymentLog -Message "Transcript not stopped - file logging is disabled" -Level Debug -Mode $LoggingMode
+            Write-EnhancedLog -Message "Transcript not stopped - file logging is disabled" -Level Debug -Mode $LoggingMode
             return $false
         }
         
@@ -1058,11 +1079,11 @@ function Stop-UniversalTranscript {
             # Try to stop transcript and suppress all console output
             Stop-Transcript -ErrorAction Stop | Out-Null
             $transcriptRunning = $true
-            Write-AppDeploymentLog -Message "Transcript stopped successfully." -Level Information -Mode $LoggingMode
+            Write-EnhancedLog -Message "Transcript stopped successfully." -Level Information -Mode $LoggingMode
         }
         catch [System.InvalidOperationException] {
             # This is expected if no transcript is running
-            Write-AppDeploymentLog -Message "No active transcript to stop." -Level Debug -Mode $LoggingMode
+            Write-EnhancedLog -Message "No active transcript to stop." -Level Debug -Mode $LoggingMode
         }
         catch {
             # Other transcript-related errors
@@ -1118,7 +1139,7 @@ function Get-TranscriptFilePath {
         return $transcriptFilePath
     }
     catch {
-        Write-AppDeploymentLog -Message "Failed to generate transcript file path: $($_.Exception.Message)" -Level Error -Mode SilentMode
+        Write-EnhancedLog -Message "Failed to generate transcript file path: $($_.Exception.Message)" -Level Error -Mode SilentMode
         # Return a fallback path with user context
         $userContext = Get-CurrentUser
         $callingScript = Get-CallingScriptName
@@ -1174,7 +1195,7 @@ function Get-CSVLogFilePath {
         return $csvLogFilePath
     }
     catch {
-        Write-AppDeploymentLog -Message "Failed to generate CSV log file path: $($_.Exception.Message)" -Level Error -Mode SilentMode
+        Write-EnhancedLog -Message "Failed to generate CSV log file path: $($_.Exception.Message)" -Level Error -Mode SilentMode
         # Return a fallback path with user context
         $userContext = Get-CurrentUser
         $callingScript = Get-CallingScriptName
@@ -1223,6 +1244,7 @@ function Get-LoggingModuleVersion {
 Export-ModuleMember -Function @(
     'Initialize-Logging',
     'Write-EnhancedLog',
+    'Write-EnhancedLog',
     'Handle-Error',
     'Get-ParentScriptName',
     'Get-LoggingModuleVersion',
@@ -1233,4 +1255,5 @@ Export-ModuleMember -Function @(
     'Get-TranscriptFilePath',
     'Get-CSVLogFilePath'
 )
+
 
