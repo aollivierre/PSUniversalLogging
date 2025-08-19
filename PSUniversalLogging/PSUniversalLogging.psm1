@@ -258,19 +258,22 @@ function Write-EnhancedLog {
     # Use mapped level for internal operations
     $Level = $mappedLevel
 
-    # Determine logging mode - check EnableDebug first, then parameter, then default to Off
+    # Determine logging mode - check EnableDebug first, then parameter
+    # IMPORTANT: File logging should ALWAYS happen regardless of EnableDebug
+    # EnableDebug only controls console output, not file logging
     $loggingMode = if ($global:EnableDebug) { 
         'EnableDebug' 
     } elseif ($Mode -ne 'Off') { 
         $Mode 
     } else { 
-        'Off' 
+        # Default to file logging only (no console output)
+        'SilentMode' 
     }
 
-    # Exit early if logging is completely disabled
-    if ($loggingMode -eq 'Off') {
-        return
-    }
+    # CRITICAL FIX: Never skip file logging
+    # File logging should ALWAYS happen unless explicitly disabled
+    # The early return was preventing all file logging when EnableDebug was false
+    # Removed the early return to ensure file logging always occurs
 
     # Enhanced caller information using improved logic from Write-EnhancedLog
     $callStack = Get-PSCallStack
@@ -337,10 +340,16 @@ function Write-EnhancedLog {
     }
     
     # Get parent script name
-    $parentScriptName = try {
-        Get-ParentScriptName
-    } catch {
-        "UnknownScript"
+    # Use session parent script if available (set during Initialize-Logging)
+    # This ensures consistency with the log file path created during initialization
+    $parentScriptName = if ($script:SessionParentScript) {
+        $script:SessionParentScript
+    } else {
+        try {
+            Get-ParentScriptName
+        } catch {
+            "UnknownScript"
+        }
     }
     
     # Line number was already captured when we found the actual caller
@@ -621,9 +630,11 @@ function Write-EnhancedLog {
     #endregion CSV Logging
 
     #region Console Output
-    # Always output to console unless explicitly in SilentMode
-    if ($loggingMode -eq 'EnableDebug') {
-        # Show debug messages only in EnableDebug mode
+    # Output to console based on logging mode
+    # SilentMode = file logging only (no console output)
+    # EnableDebug = file logging + console output
+    if ($loggingMode -ne 'SilentMode') {
+        # Skip DEBUG messages unless in EnableDebug mode
         if ($Level.ToUpper() -eq 'DEBUG' -and $loggingMode -ne 'EnableDebug') {
             # Skip debug messages unless in debug mode
         } else {
@@ -641,134 +652,6 @@ function Write-EnhancedLog {
     }
     #endregion Console Output
 }
-
-<#
-function Write-EnhancedLog {
-    [CmdletBinding()]
-    param (
-        [Parameter(Mandatory = $true)]
-        [string]$Message,
-        [Parameter()]
-        [ValidateSet('INFO', 'WARNING', 'ERROR', 'DEBUG', 'SUCCESS', 'INFORMATION', 'CRITICAL', 'NOTICE', 'VERBOSE')]
-        [string]$Level = 'INFO',
-        [Parameter()]
-        [ValidateSet('EnableDebug', 'SilentMode', 'Off')]
-        [string]$LoggingMode = 'SilentMode'
-    )
-
-    # Map enhanced log levels to standard log levels
-    $mappedLevel = switch ($Level.ToUpper()) {
-        'CRITICAL' { 'ERROR' }
-        'ERROR'    { 'ERROR' }
-        'WARNING'  { 'WARNING' }
-        'INFO'     { 'INFO' }
-        'INFORMATION' { 'INFO' }
-        'DEBUG'    { 'DEBUG' }
-        'NOTICE'   { 'INFO' }
-        'VERBOSE'  { 'DEBUG' }
-        'SUCCESS'  { 'SUCCESS' }
-        default    { 'INFO' }
-    }
-
-    # Determine logging mode - check EnableDebug first, then parameter
-    $loggingMode = if ($global:EnableDebug) { 
-        'EnableDebug' 
-    } else { 
-        $LoggingMode 
-    }
-
-    # Note: We NO longer exit early - we always want file logging even when console is off
-
-    # Get caller information using call stack
-    $callStack = Get-PSCallStack
-    $callerFunction = '<Unknown>'
-    $lineNumber = 0
-    
-    # Skip wrapper functions to find the real caller
-    if ($callStack.Count -ge 2) {
-        $actualCaller = $callStack[1]
-        $callerFunction = $actualCaller.Command
-        $lineNumber = $actualCaller.ScriptLineNumber
-    }
-
-    # Get the parent script name
-    $parentScriptName = Get-ParentScriptName
-
-    # Format timestamp
-    $timestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
-
-    # Build console message with appropriate detail level
-    # Show function/line for ALL messages when EnableDebug, or for ERROR/WARNING always
-    if ($loggingMode -eq 'EnableDebug') {
-        # In debug mode, show function and line number for ALL messages
-        $consoleLogMessage = "[$timestamp] [${mappedLevel}:${callerFunction}:${lineNumber}] $Message"
-    } elseif ($mappedLevel -in @('ERROR', 'WARNING')) {
-        # Always show function/line for errors and warnings
-        $consoleLogMessage = "[$timestamp] [${mappedLevel}:${callerFunction}:${lineNumber}] $Message"
-    } else {
-        # Clean output for RMM when not in debug mode
-        $consoleLogMessage = "[$timestamp] [$mappedLevel] $Message"
-    }
-
-    # File logging - ALWAYS log to file regardless of mode
-    try {
-        if ($script:LogConfig.Initialized -and $script:LogConfig.LogPath) {
-            # File always gets full details
-            $fileLogMessage = "[$timestamp] [$parentScriptName.${callerFunction}:${lineNumber}] [$mappedLevel] $Message"
-            Add-Content -Path $script:LogConfig.LogPath -Value $fileLogMessage -Force -ErrorAction SilentlyContinue
-        }
-    } catch {
-        # Silent error handling for file logging
-    }
-
-    # CSV logging
-    try {
-        if ($script:LogConfig.Initialized -and $script:LogConfig.CSVLogPath) {
-            # Ensure CSV directory exists
-            $csvDir = Split-Path -Path $script:LogConfig.CSVLogPath -Parent
-            if (-not (Test-Path -Path $csvDir)) {
-                New-Item -ItemType Directory -Path $csvDir -Force -ErrorAction SilentlyContinue | Out-Null
-            }
-            
-            $csvEntry = [PSCustomObject]@{
-                Timestamp = $timestamp
-                Level = $mappedLevel
-                Function = $callerFunction
-                LineNumber = $lineNumber
-                Message = $Message
-                ScriptName = $parentScriptName
-            }
-            
-            # Check if file exists to determine if we need headers
-            if (Test-Path -Path $script:LogConfig.CSVLogPath) {
-                $csvEntry | Export-Csv -Path $script:LogConfig.CSVLogPath -Append -NoTypeInformation -Force -ErrorAction SilentlyContinue
-            } else {
-                $csvEntry | Export-Csv -Path $script:LogConfig.CSVLogPath -NoTypeInformation -Force -ErrorAction SilentlyContinue
-            }
-        }
-    } catch {
-        # Silent error handling for CSV logging
-    }
-
-    # Console Output - Only output when EnableDebug mode is active
-    if ($loggingMode -eq 'EnableDebug') {
-        # Show debug messages only in EnableDebug mode
-        if ($mappedLevel -eq 'DEBUG' -and $loggingMode -ne 'EnableDebug') {
-            # Skip debug messages unless in debug mode
-        } else {
-            switch ($mappedLevel) {
-                'ERROR' { Write-Host $consoleLogMessage -ForegroundColor Red }
-                'WARNING' { Write-Host $consoleLogMessage -ForegroundColor Yellow }
-                'INFO' { Write-Host $consoleLogMessage -ForegroundColor White }
-                'DEBUG' { Write-Host $consoleLogMessage -ForegroundColor Gray }
-                'SUCCESS' { Write-Host $consoleLogMessage -ForegroundColor Green }
-            }
-        }
-    }
-}
-
-
-#>
 
 #region Helper Functions
 
@@ -1256,7 +1139,6 @@ function Get-LoggingModuleVersion {
 # Export module members
 Export-ModuleMember -Function @(
     'Initialize-Logging',
-    'Write-EnhancedLog',
     'Write-EnhancedLog',
     'Handle-Error',
     'Get-ParentScriptName',
