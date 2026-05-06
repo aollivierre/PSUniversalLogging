@@ -145,11 +145,11 @@ PrivateData = @{
 ## Version 2.2.0 - 2025-08-03
 ### Changed
 - Simplified logging levels to short, clear names:
-  - Information → INFO
-  - Warning → WARNING  
-  - Error → ERROR
-  - Debug → DEBUG
-  - Success → SUCCESS
+  - Information -> INFO
+  - Warning -> WARNING  
+  - Error -> ERROR
+  - Debug -> DEBUG
+  - Success -> SUCCESS
 - All scripts now use consistent uppercase short levels
 - Enhanced mapper supports both old and new names for compatibility
 

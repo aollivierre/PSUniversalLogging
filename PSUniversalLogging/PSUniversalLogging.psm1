@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
     Universal PowerShell Logging Module - Generic, Reusable, and Extensible
     
